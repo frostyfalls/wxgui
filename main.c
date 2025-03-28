@@ -11,13 +11,9 @@ struct ResponseData {
   size_t len;
 };
 
-struct BoundingBox {
-  float left, bottom, right, top;
-};
-
 struct Location {
   char *name;
-  struct BoundingBox *bbox;
+  float latitude, longitude;
 };
 
 static size_t write_callback(char *ptr, size_t size, size_t nmemb, void *resp) {
@@ -33,7 +29,6 @@ static size_t write_callback(char *ptr, size_t size, size_t nmemb, void *resp) {
   memcpy(&(mem->data[mem->len]), ptr, realsize);
   mem->len += realsize;
   mem->data[mem->len] = 0;
-
   return realsize;
 }
 
@@ -51,26 +46,19 @@ static struct Location *parse_geocode_request(struct ResponseData *resp) {
   yyjson_val *name_obj = yyjson_obj_get(properties_obj, "name");
   location->name = (char *)yyjson_get_str(name_obj);
 
-  yyjson_val *bbox_obj = yyjson_obj_get(feature_obj, "bbox");
-  struct BoundingBox *bbox = calloc(sizeof(struct BoundingBox), 1);
-  location->bbox = bbox;
+  yyjson_val *geometry_obj = yyjson_obj_get(feature_obj, "geometry");
+  yyjson_val *coordinates_obj = yyjson_obj_get(geometry_obj, "coordinates");
 
   size_t i, max;
-  yyjson_val *item;
-  yyjson_arr_foreach(bbox_obj, i, max, item) {
-    float bbox_item = yyjson_get_real(item);
+  yyjson_val *val;
+  yyjson_arr_foreach(coordinates_obj, i, max, val) {
+    float coord = yyjson_get_real(val);
     switch (i) {
     case 0:
-      bbox->left = bbox_item;
+      location->latitude = coord;
       break;
     case 1:
-      bbox->bottom = bbox_item;
-      break;
-    case 2:
-      bbox->right = bbox_item;
-      break;
-    case 3:
-      bbox->top = bbox_item;
+      location->longitude = coord;
       break;
     default:
       return NULL;
@@ -100,20 +88,22 @@ static struct Location *do_geocode_request(CURL *curl,
   struct ResponseData resp = {0};
 
   curl_easy_setopt(curl, CURLOPT_URL, url);
-
   curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT);
-
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&resp);
 
   CURLcode res = curl_easy_perform(curl);
   if (res != CURLE_OK) {
-    fputs("failed to perform request", stderr);
+    fputs("failed to perform geocode request", stderr);
     return NULL;
   }
   free(url);
 
   struct Location *location = parse_geocode_request(&resp);
+  if (location == NULL) {
+    fputs("failed to parse geocode request", stderr);
+    return NULL;
+  }
   free(resp.data);
 
   return location;
@@ -132,10 +122,13 @@ int main(void) {
   }
 
   struct Location *location = do_geocode_request(curl, LOCATION);
+  if (location == NULL) {
+    return 1;
+  }
+
   printf("Name: %s\n"
-         "Bounding box: [%f, %f, %f, %f]\n",
-         location->name, location->bbox->left, location->bbox->bottom,
-         location->bbox->right, location->bbox->top);
+         "Coordinates: %f, %f\n",
+         location->name, location->latitude, location->longitude);
 
   return 0;
 }
