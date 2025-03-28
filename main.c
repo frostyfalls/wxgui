@@ -1,73 +1,116 @@
-#include <stdio.h>
-#include <stdbool.h>
 #include <curl/curl.h>
+#include <stdbool.h>
+#include <stdio.h>
 #include <yyjson.h>
 
+#define LOCATION "Tampa"
 #define USER_AGENT "wxgui v" VERSION " (https://github.com/frostyfalls/wxgui)"
 
-struct memory {
-  char *response;
-  size_t size;
+struct ResponseData {
+  char *data;
+  size_t len;
 };
 
-static size_t write_callback(char *data, size_t size, size_t nmemb,
-                             void *clientp) {
-  size_t realsize = size * nmemb;
-  struct memory *mem = (struct memory *)clientp;
+struct BoundingBox {
+  float left, bottom, right, top;
+};
 
-  char *ptr = realloc(mem->response, mem->size + realsize + 1);
-  if (ptr == NULL) {
+struct Location {
+  char *name;
+  struct BoundingBox *bbox;
+};
+
+static size_t write_callback(char *ptr, size_t size, size_t nmemb, void *resp) {
+  size_t realsize = size * nmemb;
+
+  struct ResponseData *mem = (struct ResponseData *)resp;
+  char *resp_ptr = realloc(mem->data, mem->len + realsize + 1);
+  if (resp_ptr == NULL) {
     return 0;
   }
 
-  mem->response = ptr;
-  memcpy(&(mem->response[mem->size]), data, realsize);
-  mem->size += realsize;
-  mem->response[mem->size] = 0;
+  mem->data = resp_ptr;
+  memcpy(&(mem->data[mem->len]), ptr, realsize);
+  mem->len += realsize;
+  mem->data[mem->len] = 0;
 
   return realsize;
 }
 
-static void print_placeholder_json(struct memory *chunk) {
-  yyjson_doc *doc = yyjson_read(chunk->response, chunk->size, 0);
+static struct Location *parse_geocode_request(struct ResponseData *resp) {
+  yyjson_doc *doc = yyjson_read(resp->data, resp->len, 0);
+  if (doc == NULL) {
+    return NULL;
+  }
   yyjson_val *root = yyjson_doc_get_root(doc);
 
-  yyjson_val *user_id = yyjson_obj_get(root, "userId");
-  yyjson_val *id = yyjson_obj_get(root, "id");
-  yyjson_val *title = yyjson_obj_get(root, "title");
-  yyjson_val *body = yyjson_obj_get(root, "body");
+  yyjson_val *features = yyjson_obj_get(root, "features");
+  yyjson_val *first_feature = yyjson_arr_get_first(features);
+  yyjson_val *properties = yyjson_obj_get(first_feature, "properties");
 
-  printf("Placeholder data:\n"
-         " - User ID: %d\n"
-         " - ID: %d\n"
-         " - Title: %s\n"
-         " - Body: %s\n",
-         (int)yyjson_get_num(user_id), (int)yyjson_get_num(id),
-         yyjson_get_str(title), yyjson_get_str(body));
+  struct Location *location = calloc(sizeof(struct Location), 1);
+
+  yyjson_val *name = yyjson_obj_get(properties, "name");
+  location->name = (char *)yyjson_get_str(name);
+
+  yyjson_val *bbox = yyjson_obj_get(first_feature, "bbox");
+
+  struct BoundingBox *bbox_struct = calloc(sizeof(struct BoundingBox), 1);
+  location->bbox = bbox_struct;
+
+  size_t i, max;
+  yyjson_val *bbox_item;
+  yyjson_arr_foreach(bbox, i, max, bbox_item) {
+    float b = yyjson_get_real(bbox_item);
+    switch (i) {
+    case 0:
+      bbox_struct->left = b;
+      break;
+    case 1:
+      bbox_struct->bottom = b;
+      break;
+    case 2:
+      bbox_struct->right = b;
+      break;
+    case 3:
+      bbox_struct->top = b;
+      break;
+    default:
+      return NULL;
+    }
+  }
 
   yyjson_doc_free(doc);
+
+  return location;
 }
 
-static CURLcode do_placeholder_request(CURL *curl) {
-  struct memory chunk = {0};
+static struct Location *do_geocode_request(CURL *curl,
+                                           const char *location_name) {
+  // TODO(frosty): Properly determine the URL buffer size
+  char url[128] = "https://nominatim.openstreetmap.org/search?q=";
+  strcat(url, location_name);
+  strcat(url, "&format=geojson");
 
-  curl_easy_setopt(curl, CURLOPT_URL,
-                   "https://jsonplaceholder.typicode.com/posts/1");
+  struct ResponseData resp = {0};
+
+  curl_easy_setopt(curl, CURLOPT_URL, url);
 
   curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT);
 
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&resp);
 
   CURLcode res = curl_easy_perform(curl);
   if (res != CURLE_OK) {
-    return res;
+    fputs("failed to perform request", stderr);
+    return NULL;
   }
 
-  print_placeholder_json(&chunk);
+  struct Location *location = parse_geocode_request(&resp);
+  free(resp.data);
 
-  free(chunk.response);
-  return res;
+  return location;
 }
 
 int main(void) {
@@ -82,11 +125,11 @@ int main(void) {
     return 1;
   }
 
-  CURLcode res = do_placeholder_request(curl);
-  if (res != CURLE_OK) {
-    fputs("failed to perform request", stderr);
-    return 1;
-  }
+  struct Location *location = do_geocode_request(curl, LOCATION);
+  printf("Name: %s\n"
+         "Bounding box: [%f, %f, %f, %f]\n",
+         location->name, location->bbox->left, location->bbox->bottom,
+         location->bbox->right, location->bbox->top);
 
   return 0;
 }

@@ -12,12 +12,11 @@ add_project_arguments([
 ], language: 'c')
 
 libcurl_dep = dependency('libcurl')
-sdl2_dep = dependency('sdl2')
 yyjson_dep = dependency('yyjson')
 
 executable(
   'wxgui',
   ['main.c'],
-  dependencies: [libcurl_dep, sdl2_dep, yyjson_dep],
+  dependencies: [libcurl_dep, yyjson_dep],
   install: true,
 )
