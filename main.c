@@ -53,12 +53,13 @@ static struct Location *parse_geocode_request(struct ResponseData *resp) {
   yyjson_val *val;
   yyjson_arr_foreach(coordinates_obj, i, max, val) {
     float coord = yyjson_get_real(val);
+    // Why is this backwards, OpenStreetMap?
     switch (i) {
     case 0:
-      location->latitude = coord;
+      location->longitude = coord;
       break;
     case 1:
-      location->longitude = coord;
+      location->latitude = coord;
       break;
     default:
       return NULL;
