@@ -16,6 +16,15 @@ struct Location {
   float latitude, longitude;
 };
 
+struct DayForecast {
+  int temperature, precipitation_chance;
+  char *name, *wind_speed, *wind_direction, *short_forecast, *detailed_forecast;
+};
+
+struct ForecastData {
+  struct DayForecast one, two, three;
+};
+
 static size_t write_callback(char *ptr, size_t size, size_t nmemb, void *resp) {
   size_t realsize = size * nmemb;
 
@@ -30,6 +39,130 @@ static size_t write_callback(char *ptr, size_t size, size_t nmemb, void *resp) {
   mem->len += realsize;
   mem->data[mem->len] = 0;
   return realsize;
+}
+
+static char *parse_forecast_url(struct ResponseData *resp) {
+  yyjson_doc *doc = yyjson_read(resp->data, resp->len, 0);
+  yyjson_val *root = yyjson_doc_get_root(doc);
+
+  yyjson_val *properties_obj = yyjson_obj_get(root, "properties");
+  yyjson_val *forecast_url_obj = yyjson_obj_get(properties_obj, "forecast");
+  char *forecast_url = (char *)yyjson_get_str(forecast_url_obj);
+
+  yyjson_doc_free(doc);
+
+  return forecast_url;
+}
+
+static struct ForecastData *do_forecast_request(CURL *curl,
+                                                struct Location *location) {
+  const char *url_base = "https://api.weather.gov/points/";
+  const size_t url_params_size =
+      snprintf(NULL, 0, "%.4f,%.4f", location->latitude, location->longitude) +
+      1;
+  char *url_params = malloc(url_params_size);
+  snprintf(url_params, url_params_size, "%.4f,%.4f", location->latitude,
+           location->longitude);
+
+  size_t url_size = strlen(url_base) + strlen(url_params) + 1;
+  char *url = malloc(url_size);
+  if (url == NULL) {
+    return NULL;
+  }
+  strcpy(url, url_base);
+  strcat(url, url_params);
+  free(url_params);
+
+  struct ResponseData resp = {0};
+  curl_easy_setopt(curl, CURLOPT_URL, url);
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT);
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&resp);
+
+  CURLcode res = curl_easy_perform(curl);
+  if (res != CURLE_OK) {
+    fputs("failed to perform forecast request", stderr);
+    return NULL;
+  }
+  free(url);
+
+  const char *forecast_url = parse_forecast_url(&resp);
+  // XXX(frosty): Is this the correct way to reset the response variable?
+  resp = (struct ResponseData){0};
+
+  curl_easy_setopt(curl, CURLOPT_URL, forecast_url);
+  res = curl_easy_perform(curl);
+  if (res != CURLE_OK) {
+    fputs("failed to perform forecast request", stderr);
+    return NULL;
+  }
+
+  yyjson_doc *doc = yyjson_read(resp.data, resp.len, 0);
+  yyjson_val *root = yyjson_doc_get_root(doc);
+
+  yyjson_val *properties_obj = yyjson_obj_get(root, "properties");
+  yyjson_val *periods_obj = yyjson_obj_get(properties_obj, "periods");
+
+  struct ForecastData forecast = {0};
+
+  size_t i, max;
+  yyjson_val *val;
+  yyjson_arr_foreach(periods_obj, i, max, val) {
+    // XXX(frosty): Should a default case or initialization to NULL be done?
+    struct DayForecast *forecast_day = NULL;
+    switch (i) {
+    case 0:
+      forecast_day = &forecast.one;
+      break;
+    case 1:
+      forecast_day = &forecast.two;
+      break;
+    case 2:
+      forecast_day = &forecast.three;
+      break;
+    }
+    if (forecast_day == NULL) {
+      break;
+    }
+
+    yyjson_val *name_obj = yyjson_obj_get(val, "name");
+    yyjson_val *temperature_obj = yyjson_obj_get(val, "temperature");
+    yyjson_val *wind_speed_obj = yyjson_obj_get(val, "windSpeed");
+    yyjson_val *wind_direction_obj = yyjson_obj_get(val, "windDirection");
+    yyjson_val *short_forecast_obj = yyjson_obj_get(val, "shortForecast");
+    yyjson_val *detailed_forecast_obj = yyjson_obj_get(val, "detailedForecast");
+    yyjson_val *precipitation_chance_outer_obj =
+        yyjson_obj_get(val, "probabilityOfPrecipitation");
+    yyjson_val *precipitation_chance_obj =
+        yyjson_obj_get(precipitation_chance_outer_obj, "value");
+
+    forecast_day->name = (char *)yyjson_get_str(name_obj);
+    forecast_day->temperature = yyjson_get_real(temperature_obj);
+    forecast_day->wind_speed = (char *)yyjson_get_str(wind_speed_obj);
+    forecast_day->wind_direction = (char *)yyjson_get_str(wind_direction_obj);
+    forecast_day->short_forecast = (char *)yyjson_get_str(short_forecast_obj);
+    forecast_day->detailed_forecast =
+        (char *)yyjson_get_str(detailed_forecast_obj);
+    forecast_day->precipitation_chance =
+        yyjson_get_real(precipitation_chance_obj);
+
+    // TODO(frosty): Move print statements to main()
+    printf("%s\n"
+           "%s\n"
+           "%s\n"
+           " - Temperature: %d°F\n"
+           " - Wind: %s %s\n"
+           " - Rain chance: %d%%\n",
+           forecast_day->name, forecast_day->short_forecast,
+           forecast_day->detailed_forecast, forecast_day->temperature,
+           forecast_day->wind_speed, forecast_day->wind_direction,
+           forecast_day->precipitation_chance);
+    if (i < 2) {
+      printf("\n");
+    }
+  }
+
+  return NULL;
 }
 
 // TODO(frosty): Implement any form of error checking
@@ -75,9 +208,9 @@ static struct Location *do_geocode_request(CURL *curl,
                                            const char *location_name) {
   const char *url_base = "https://nominatim.openstreetmap.org/search?q=";
   const char *url_params = "&format=geojson";
+
   size_t url_size =
       strlen(url_base) + strlen(location_name) + strlen(url_params) + 1;
-
   char *url = malloc(url_size);
   if (url == NULL) {
     return NULL;
@@ -87,7 +220,6 @@ static struct Location *do_geocode_request(CURL *curl,
   strcat(url, url_params);
 
   struct ResponseData resp = {0};
-
   curl_easy_setopt(curl, CURLOPT_URL, url);
   curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -130,6 +262,16 @@ int main(void) {
   printf("Name: %s\n"
          "Coordinates: %f, %f\n",
          location->name, location->latitude, location->longitude);
+
+  struct ForecastData *forecast = do_forecast_request(curl, location);
+  if (forecast == NULL) {
+    free(location);
+    return 1;
+  }
+  (void)forecast;
+
+  free(location);
+  free(forecast);
 
   return 0;
 }
