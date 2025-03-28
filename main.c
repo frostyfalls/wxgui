@@ -37,43 +37,40 @@ static size_t write_callback(char *ptr, size_t size, size_t nmemb, void *resp) {
   return realsize;
 }
 
+// TODO(frosty): Implement any form of error checking
 static struct Location *parse_geocode_request(struct ResponseData *resp) {
   yyjson_doc *doc = yyjson_read(resp->data, resp->len, 0);
-  if (doc == NULL) {
-    return NULL;
-  }
   yyjson_val *root = yyjson_doc_get_root(doc);
 
-  yyjson_val *features = yyjson_obj_get(root, "features");
-  yyjson_val *first_feature = yyjson_arr_get_first(features);
-  yyjson_val *properties = yyjson_obj_get(first_feature, "properties");
+  yyjson_val *features_obj = yyjson_obj_get(root, "features");
+  yyjson_val *feature_obj = yyjson_arr_get_first(features_obj);
+  yyjson_val *properties_obj = yyjson_obj_get(feature_obj, "properties");
 
   struct Location *location = calloc(sizeof(struct Location), 1);
 
-  yyjson_val *name = yyjson_obj_get(properties, "name");
-  location->name = (char *)yyjson_get_str(name);
+  yyjson_val *name_obj = yyjson_obj_get(properties_obj, "name");
+  location->name = (char *)yyjson_get_str(name_obj);
 
-  yyjson_val *bbox = yyjson_obj_get(first_feature, "bbox");
-
-  struct BoundingBox *bbox_struct = calloc(sizeof(struct BoundingBox), 1);
-  location->bbox = bbox_struct;
+  yyjson_val *bbox_obj = yyjson_obj_get(feature_obj, "bbox");
+  struct BoundingBox *bbox = calloc(sizeof(struct BoundingBox), 1);
+  location->bbox = bbox;
 
   size_t i, max;
-  yyjson_val *bbox_item;
-  yyjson_arr_foreach(bbox, i, max, bbox_item) {
-    float b = yyjson_get_real(bbox_item);
+  yyjson_val *item;
+  yyjson_arr_foreach(bbox_obj, i, max, item) {
+    float bbox_item = yyjson_get_real(item);
     switch (i) {
     case 0:
-      bbox_struct->left = b;
+      bbox->left = bbox_item;
       break;
     case 1:
-      bbox_struct->bottom = b;
+      bbox->bottom = bbox_item;
       break;
     case 2:
-      bbox_struct->right = b;
+      bbox->right = bbox_item;
       break;
     case 3:
-      bbox_struct->top = b;
+      bbox->top = bbox_item;
       break;
     default:
       return NULL;
@@ -87,10 +84,18 @@ static struct Location *parse_geocode_request(struct ResponseData *resp) {
 
 static struct Location *do_geocode_request(CURL *curl,
                                            const char *location_name) {
-  // TODO(frosty): Properly determine the URL buffer size
-  char url[128] = "https://nominatim.openstreetmap.org/search?q=";
+  const char *url_base = "https://nominatim.openstreetmap.org/search?q=";
+  const char *url_params = "&format=geojson";
+  size_t url_size =
+      strlen(url_base) + strlen(location_name) + strlen(url_params) + 1;
+
+  char *url = malloc(url_size);
+  if (url == NULL) {
+    return NULL;
+  }
+  strcpy(url, url_base);
   strcat(url, location_name);
-  strcat(url, "&format=geojson");
+  strcat(url, url_params);
 
   struct ResponseData resp = {0};
 
@@ -106,6 +111,7 @@ static struct Location *do_geocode_request(CURL *curl,
     fputs("failed to perform request", stderr);
     return NULL;
   }
+  free(url);
 
   struct Location *location = parse_geocode_request(&resp);
   free(resp.data);
