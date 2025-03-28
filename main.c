@@ -103,7 +103,8 @@ static struct ForecastData *do_forecast_request(CURL *curl,
   yyjson_val *properties_obj = yyjson_obj_get(root, "properties");
   yyjson_val *periods_obj = yyjson_obj_get(properties_obj, "periods");
 
-  struct ForecastData forecast = {0};
+  struct ForecastData *forecast = calloc(sizeof(struct ForecastData), 1);
+  ;
 
   size_t i, max;
   yyjson_val *val;
@@ -112,13 +113,13 @@ static struct ForecastData *do_forecast_request(CURL *curl,
     struct DayForecast *forecast_day = NULL;
     switch (i) {
     case 0:
-      forecast_day = &forecast.one;
+      forecast_day = &forecast->one;
       break;
     case 1:
-      forecast_day = &forecast.two;
+      forecast_day = &forecast->two;
       break;
     case 2:
-      forecast_day = &forecast.three;
+      forecast_day = &forecast->three;
       break;
     }
     if (forecast_day == NULL) {
@@ -145,24 +146,9 @@ static struct ForecastData *do_forecast_request(CURL *curl,
         (char *)yyjson_get_str(detailed_forecast_obj);
     forecast_day->precipitation_chance =
         yyjson_get_real(precipitation_chance_obj);
-
-    // TODO(frosty): Move print statements to main()
-    printf("%s\n"
-           "%s\n"
-           "%s\n"
-           " - Temperature: %d°F\n"
-           " - Wind: %s %s\n"
-           " - Rain chance: %d%%\n",
-           forecast_day->name, forecast_day->short_forecast,
-           forecast_day->detailed_forecast, forecast_day->temperature,
-           forecast_day->wind_speed, forecast_day->wind_direction,
-           forecast_day->precipitation_chance);
-    if (i < 2) {
-      printf("\n");
-    }
   }
 
-  return NULL;
+  return forecast;
 }
 
 // TODO(frosty): Implement any form of error checking
@@ -268,7 +254,38 @@ int main(void) {
     free(location);
     return 1;
   }
-  (void)forecast;
+
+  for (int i = 0; i < 3; i++) {
+    struct DayForecast *forecast_day = NULL;
+    switch (i) {
+    case 0:
+      forecast_day = &forecast->one;
+      break;
+    case 1:
+      forecast_day = &forecast->two;
+      break;
+    case 2:
+      forecast_day = &forecast->three;
+      break;
+    }
+    if (forecast_day == NULL) {
+      break;
+    }
+
+    printf("%s\n"
+           "%s\n"
+           "%s\n"
+           " - Temperature: %d°F\n"
+           " - Wind: %s %s\n"
+           " - Rain chance: %d%%\n",
+           forecast_day->name, forecast_day->short_forecast,
+           forecast_day->detailed_forecast, forecast_day->temperature,
+           forecast_day->wind_speed, forecast_day->wind_direction,
+           forecast_day->precipitation_chance);
+    if (i < 2) {
+      printf("\n");
+    }
+  }
 
   free(location);
   free(forecast);
